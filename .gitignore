@@ -1,0 +1,19 @@
+# 编译/生成产物
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vs/
+.vscode/
+*.sln
+*.suo
+*.VC.db
+*.VC.opendb
+
+# 日志、崩溃报告
+Saved/Logs/
+Saved/Crashes/
+
+# IDE / OS
+.DS_Store
+Thumbs.db
