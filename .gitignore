@@ -1,5 +1,19 @@
+# 编译/生成产物
 Binaries/
+DerivedDataCache/
 Intermediate/
 Saved/
-DerivedDataCache/
-Archaeologist/Intermediate/CachedAssetRegistry/CachedAssetRegistry_0_D1FB05CA46155AA61589059C2462784E.bin
+.vs/
+.vscode/
+*.sln
+*.suo
+*.VC.db
+*.VC.opendb
+
+# 日志、崩溃报告
+Saved/Logs/
+Saved/Crashes/
+
+# IDE / OS
+.DS_Store
+Thumbs.db
