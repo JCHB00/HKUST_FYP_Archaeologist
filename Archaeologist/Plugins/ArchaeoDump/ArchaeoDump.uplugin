@@ -1,0 +1,17 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "Archaeo Dump",
+	"Description": "Editor-only commandlet that dumps Blueprint graphs (nodes, pins, links) and level actor layout to text files for code review.",
+	"Category": "Editor",
+	"CreatedBy": "DSH analysis",
+	"EnabledByDefault": true,
+	"Modules": [
+		{
+			"Name": "ArchaeoDump",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	]
+}
