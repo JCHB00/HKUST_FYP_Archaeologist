@@ -21,6 +21,19 @@ enum class EDigOutcome : uint8
 };
 
 /**
+ * 准星此刻的瞄准状态。挖土、准星、高亮三处共用同一套判定，
+ * 保证"看到能挖"和"按下去真的能挖"永远是同一件事。
+ */
+UENUM(BlueprintType)
+enum class EDigAimState : uint8
+{
+    NoTarget    UMETA(DisplayName = "没打到东西"),
+    WrongTarget UMETA(DisplayName = "打的不是土"),
+    Blocked     UMETA(DisplayName = "打中土但挖不动"),
+    Diggable    UMETA(DisplayName = "可以挖")
+};
+
+/**
  * 格子坐标（整数）。
  *
  * 为什么不用引擎自带的 FIntVector？

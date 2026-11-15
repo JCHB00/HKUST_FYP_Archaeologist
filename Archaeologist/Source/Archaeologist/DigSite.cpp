@@ -234,7 +234,7 @@ FVector ADigSite::GetCellCenterWorld(FDigCellCoord Cell) const
 
 bool ADigSite::CellFromInstanceIndex(int32 InstanceIndex, FIntVector& OutCell) const
 {
-    // 目标：从 HISM 的实例下标反推出格子坐标。
+    // 目标：从 HISM 的实例下标反推出格子坐标。(在不查表下根据实例Instance的Index去计算坐标)
     //
     // 会用到的引擎函数：
     //   Blocks->GetInstanceTransform(InstanceIndex, OutTransform, /*bWorldSpace=*/false)
@@ -245,7 +245,36 @@ bool ADigSite::CellFromInstanceIndex(int32 InstanceIndex, FIntVector& OutCell) c
     //   2) 取实例变换，失败就 return false;
     //   3) OutCell = LocalToCell(变换的 GetLocation())
     //   4) return IsValidCell(OutCell)
-    return false;
+    if (!Blocks || InstanceIndex == INDEX_NONE)
+    {
+        return false;
+    }
+    FTransform  OutTransform;
+    if(! Blocks->GetInstanceTransform(InstanceIndex, OutTransform, /*bWorldSpace=*/false))//坐标结果已经被写入OutTransform, 我们只需要创建一个FTransform 来承载即可
+    {
+        //if false
+        return false;
+    }
+    OutCell = LocalToCell(OutTransform.GetLocation());//直接使用OutTransform
+    return IsValidCell(OutCell);
+    /*
+    * 整体运行逻辑
+    
+    鼠标左键
+      ↓
+    射线打在 HISM 上
+      ↓
+    FHitResult
+      ├─ Hit.Component = Blocks      ← 打中的是"土"吗
+      ├─ Hit.Item      = 137         ← 打中的是"第几个实例"（只有 HISM 会填）
+      └─ Hit.ImpactPoint = 世界坐标
+      ↓
+    CellFromInstanceIndex(137, Cell)  ← 现在写的这个function
+      ↓
+    Cell(5, 1, 2)
+      ↓
+    DigCell(Cell)                     ← 扣血 / 删除 / 出土
+    */
 }
 
 // ===========================================================================
@@ -254,87 +283,211 @@ bool ADigSite::CellFromInstanceIndex(int32 InstanceIndex, FIntVector& OutCell) c
 EDigOutcome ADigSite::ApplyDig(const FHitResult& Hit, AActor* Digger)
 {
     // 目标：拿到一次碰撞命中，判断打到哪一格，然后交给 DigCell 去扣血/删除。
-    //       这个函数的重点是"命中 -> 格子"的容错。
-    //
-    // 会用到的引擎函数/成员：
-    //   Hit.Component.Get()       被击中的组件（和 Blocks 比对，确认是土）
-    //   Hit.Item                  实例化网格的"实例下标"（HISM 会填）
-    //   Hit.bBlockingHit / Hit.ImpactPoint / Hit.ImpactNormal
-    //   CellFromInstanceIndex()   反查格子
-    //   FMath::Max(1.0f, CellSize * 0.1f)  算"往土里缩进去多少"
-    //
-    // 步骤：
-    //   1) if (CellOccupied.Num() == 0) return EDigOutcome::Invalid;
-    //   2) 声明 FIntVector Cell; bool bFoundCell = false;
-    //   3) 首选路径：if (Hit.Component.Get() == Blocks.Get() && Hit.Item != INDEX_NONE)
-    //         bFoundCell = CellFromInstanceIndex(Hit.Item, Cell);
-    //   4) 退路（HISM 没填 Item、或者命中来自别的网格时）：
-    //         if (!bFoundCell && Hit.bBlockingHit)
-    //         把 ImpactPoint 转到本地坐标，再往法线反方向缩一点点（避免正好压在格子边界），
-    //         然后 LocalToCell，再用 LinearIndex 确认这一格确实有土。
-    //      （为什么要缩：ImpactPoint 正好落在两个格子的公共面上时，FloorToInt 会随机偏向一边）
-    //   5) 都没找到：OnDigRejected(Hit.ImpactPoint, EDigOutcome::NoBlockHit)，返回 NoBlockHit
-    //   6) return DigCell(FDigCellCoord::FromIntVector(Cell), Digger);
-    return EDigOutcome::Invalid;
+    //       "命中 -> 格子"的逻辑已经抽到 ResolveCellFromHit，准星那边用的是同一份。
+
+    if (CellOccupied.Num() == 0)
+    {
+        return EDigOutcome::Invalid;
+    }
+
+    FDigCellCoord Cell;
+    if (!ResolveCellFromHit(Hit, Cell))
+    {
+        OnDigRejected(Hit.ImpactPoint, EDigOutcome::NoBlockHit);
+        return EDigOutcome::NoBlockHit;
+    }
+
+    return DigCell(Cell, Digger);
 }
 
+bool ADigSite::ResolveCellFromHit(const FHitResult& Hit, FDigCellCoord& OutCell) const
+{
+    if (CellOccupied.Num() == 0)
+    {
+        return false;
+    }
+
+    FIntVector Cell(0, 0, 0);
+    bool bFoundCell = false;
+
+    // 首选：HISM 会填 Hit.Item，直接反查实例下标（最准，不受格子边界影响）。
+    if (Hit.Component.Get() == Blocks.Get() && Hit.Item != INDEX_NONE)
+    {
+        bFoundCell = CellFromInstanceIndex(Hit.Item, Cell);
+    }
+
+    // 退路：没有 Item（或命中来自别的网格）时，用 ImpactPoint 往土里缩一点再换算。
+    //       为什么要缩：ImpactPoint 正好压在两个格子的公共面上时，FloorToInt 会偏到隔壁。
+    if (!bFoundCell && Hit.bBlockingHit)
+    {
+        const double Inset = FMath::Max(1.0, (double)CellSize * 0.1);
+        const FVector WorldPoint = Hit.ImpactPoint - Hit.ImpactNormal * Inset;
+        const FVector LocalPoint = GetActorTransform().InverseTransformPosition(WorldPoint);
+        const FIntVector Candidate = LocalToCell(LocalPoint);
+
+        const int32 CandidateIndex = LinearIndex(Candidate);
+        if (CellOccupied.IsValidIndex(CandidateIndex) && CellOccupied[CandidateIndex] != 0)
+        {
+            Cell = Candidate;
+            bFoundCell = true;
+        }
+    }
+
+    if (!bFoundCell)
+    {
+        return false;
+    }
+
+    OutCell = FDigCellCoord::FromIntVector(Cell);
+    return true;
+}
+
+bool ADigSite::CanDigCell(FDigCellCoord Cell) const
+{
+    if (!IsCellOccupied(Cell))
+    {
+        return false;
+    }
+
+    if (bRequireExposed && !IsCellExposed(Cell))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+float ADigSite::GetCellDigProgress(FDigCellCoord Cell) const
+{
+    const int32 Index = LinearIndex(Cell.ToIntVector());
+    if (!CellDamage.IsValidIndex(Index) || !CellOccupied.IsValidIndex(Index))
+    {
+        return 0.f;
+    }
+
+    // 已经挖掉的格子算 100%。
+    if (CellOccupied[Index] == 0)
+    {
+        return 1.f;
+    }
+
+    if (HitsPerBlock <= 0)
+    {
+        return 1.f;
+    }
+
+    return FMath::Clamp((float)CellDamage[Index] / (float)HitsPerBlock, 0.f, 1.f);
+}
 EDigOutcome ADigSite::DigCell(FDigCellCoord CellCoord, AActor* Digger)
 {
     // 目标：真正处理"挖这一格"：扣血 -> 没血了删实例 -> 检查文物。
     //       所有挖掘入口（ApplyDig / 蓝图 / 作弊）最后都走这里，保证规则统一。
-    //
-    // 步骤：
-    //   1) 取出 Index = LinearIndex(Cell)。非法、或者 CellOccupied[Index] == 0
-    //      -> OnDigRejected(...NoBlockHit) 并返回 NoBlockHit。
-    //   2) 悬空检查：if (bRequireExposed && !IsCellExposed(CellCoord))
-    //      -> OnDigRejected(...NotExposed) 并返回 NotExposed。
-    //   3) 先算 WorldCenter = GetCellCenterWorld(CellCoord)，后面播事件要用。
-    //   4) ++CellDamage[Index]; RemainingHits = FMath::Max(0, HitsPerBlock - CellDamage[Index]);
-    //   5) if (RemainingHits > 0) -> OnBlockDamaged(WorldCenter, CellCoord, RemainingHits);
-    //      return Success;   // 还没碎，只是掉了一小块
-    //   6) 碎了：
-    //        MarkCellEmpty(Cell)        // 逻辑上标记为空
-    //        RemoveBlockInstance(Cell)  // 视觉上移除实例（内部会重建映射）
-    //        OnBlockDug(WorldCenter, CellCoord)
-    //        TryRevealArtifacts(Cell, Digger)
-    //        return Success;
-    return EDigOutcome::Invalid;
+
+    const FIntVector Cell = CellCoord.ToIntVector();
+    const int32 Index = LinearIndex(Cell);
+
+    // 1) 非法格子，或者这一格已经没有土了
+    if (!CellOccupied.IsValidIndex(Index) || CellOccupied[Index] == 0)
+    {
+        OnDigRejected(GetCellCenterWorld(CellCoord), EDigOutcome::NoBlockHit);
+        return EDigOutcome::NoBlockHit;
+    }
+
+    // 2) 被土包住的格子挖不动（bRequireExposed 关掉就允许掏洞）
+    if (bRequireExposed && !IsCellExposed(CellCoord))
+    {
+        OnDigRejected(GetCellCenterWorld(CellCoord), EDigOutcome::NotExposed);
+        return EDigOutcome::NotExposed;
+    }
+
+    // 3) 后面播事件要用世界坐标，先算好
+    const FVector WorldCenter = GetCellCenterWorld(CellCoord);
+
+    // 4) 扣一次血
+    ++CellDamage[Index];
+    const int32 RemainingHits = FMath::Max(0, HitsPerBlock - CellDamage[Index]);
+
+    // 5) 还没碎：只是掉了一小块
+    if (RemainingHits > 0)
+    {
+        OnBlockDamaged(WorldCenter, CellCoord, RemainingHits);
+        return EDigOutcome::Success;
+    }
+
+    // 6) 碎了：逻辑清空 -> 视觉移除 -> 播事件 -> 检查文物
+    MarkCellEmpty(Cell);
+    RemoveBlockInstance(Cell);
+    OnBlockDug(WorldCenter, CellCoord);
+    TryRevealArtifacts(Cell, Digger);
+
+    return EDigOutcome::Success;
 }
 
 bool ADigSite::IsCellOccupied(FDigCellCoord Cell) const
 {
-    // TODO: LinearIndex -> 检查 CellOccupied 里是不是 1。
-    return false;
+    const int32 Index = LinearIndex(Cell.ToIntVector());
+    return CellOccupied.IsValidIndex(Index) && CellOccupied[Index] != 0;
 }
 
 bool ADigSite::IsCellExposed(FDigCellCoord CellCoord) const
 {
     // 目标：判断这一格是否"露在空气里"（能不能挖）。
-    //
-    // 思路：看六个邻居（±X / ±Y / ±Z）。
-    //   - 邻居越界（不在网格里）-> 说明这一面朝着外面的空气 -> 可以挖
-    //   - 邻居在网格里但 CellOccupied == 0 -> 也是空气 -> 可以挖
-    //   - 六个邻居全是有土的格子 -> 被包死了 -> 挖不动
-    //
-    // 实现提示：
-    //   把六个偏移写成一个 static const FIntVector Offsets[6] 数组循环，
-    //   比写六段 if 好读。注意 C++ 里 FIntVector 支持 operator+。
-    //
-    // 还有一个特例：最上面一层（Cell.Z == Size.Z - 1）上方就是地表，
-    // 严格说上面那格越界已经覆盖了，但如果你把 Z 循环写成从 0 开始，
-    // 记得自己验证一下最上层能不能挖——这是最容易漏的一条。
+    //   邻居越界      -> 这一面朝着网格外面的空气 -> 能挖
+    //   邻居是空格子  -> 能挖
+    //   六个邻居全有土 -> 被包死，挖不动
+
+    const FIntVector Cell = CellCoord.ToIntVector();
+
+    static const FIntVector Offsets[6] =
+    {
+        FIntVector( 1,  0,  0),
+        FIntVector(-1,  0,  0),
+        FIntVector( 0,  1,  0),
+        FIntVector( 0, -1,  0),
+        FIntVector( 0,  0,  1),
+        FIntVector( 0,  0, -1),
+    };
+
+    for (const FIntVector& Offset : Offsets)
+    {
+        const FIntVector Neighbor = Cell + Offset;
+
+        if (!IsValidCell(Neighbor))
+        {
+            return true;
+        }
+
+        const int32 NeighborIndex = LinearIndex(Neighbor);
+        if (!CellOccupied.IsValidIndex(NeighborIndex) || CellOccupied[NeighborIndex] == 0)
+        {
+            return true;
+        }
+    }
+
+    // 六个邻居全是土
     return false;
 }
 
 void ADigSite::MarkCellEmpty(const FIntVector& Cell)
 {
-    // TODO: LinearIndex -> CellOccupied[Index] = 0（记得先做 IsValidIndex 检查）。
+    const int32 Index = LinearIndex(Cell);
+    if (CellOccupied.IsValidIndex(Index))
+    {
+        CellOccupied[Index] = 0;
+    }
 }
 
 int32 ADigSite::GetRemainingBlockCount() const
 {
     // TODO: 遍历 CellOccupied，统计非 0 的个数。
-    return 0;
+    int32 count = 0;
+    for (auto i : CellOccupied)
+    {
+        if (i) {
+            count++;
+        }
+    }
+    return count;
 }
 
 void ADigSite::ResetSite()
@@ -348,60 +501,112 @@ void ADigSite::ResetSite()
 // ===========================================================================
 void ADigSite::RemoveBlockInstance(const FIntVector& Cell)
 {
-    // 目标：从 HISM 里删掉这一格的实例。
+    // 目标：把这一格的 HISM 实例从画面上去掉（只管视觉，逻辑由 MarkCellEmpty 管）。
     //
-    // 必须知道的坑：
-    //   Blocks->RemoveInstance(i) 之后，原来排在 i 后面的实例会整体往前挪一位
-    //   （UE5.8 的 ISM 默认走"有序 RemoveAt"，不是 RemoveAtSwap，
-    //    见 Engine/Source/Runtime/Engine/Private/InstancedStaticMesh.cpp:3999）。
-    //   所以你不能只把 CellToInstance[这一格] 设成 -1 —— 那样后面所有格子的映射
-    //   都会错位一格，下一次挖掘就会挖到隔壁，甚至删错东西。
-    //
-    // 步骤：
-    //   1) Index = LinearIndex(Cell)；CellToInstance 里取 InstanceIndex。
-    //   2) if (Blocks && InstanceIndex != INDEX_NONE) Blocks->RemoveInstance(InstanceIndex);
-    //   3) CellToInstance[Index] = INDEX_NONE;
-    //   4) RebuildInstanceMapping();   // 交给下面那个函数兜底
+    // 坑：Blocks->RemoveInstance(i) 之后，原来排在 i 后面的实例会整体往前挪一位
+    //     （UE5.8 的 ISM 默认走"有序 RemoveAt"，不是 RemoveAtSwap，见
+    //      Engine/Source/Runtime/Engine/Private/InstancedStaticMesh.cpp:3999），
+    //     所以删完必须重建 CellToInstance，否则下一次挖掘会挖到隔壁。
+
+    const int32 CellIndex = LinearIndex(Cell);
+    if (!Blocks || !CellToInstance.IsValidIndex(CellIndex))
+    {
+        return;
+    }
+
+    const int32 InstanceIndex = CellToInstance[CellIndex];
+    if (InstanceIndex != INDEX_NONE)
+    {
+        if (!Blocks->RemoveInstance(InstanceIndex))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("DigSite: RemoveInstance(%d) 失败"), InstanceIndex);
+        }
+    }
+
+    CellToInstance[CellIndex] = INDEX_NONE;
+
+    // 索引整体前移，映射表已失效，必须重建。
+    RebuildInstanceMapping();
 }
 
 void ADigSite::RebuildInstanceMapping()
 {
-    // 目标：把 CellToInstance 整张表按"当前 HISM 里真实的实例"重建。
-    //
-    // 为什么重建而不是增量维护：
-    //   增量维护要知道 RemoveInstance 到底是 swap 还是 shift（依赖版本和 cvar），
-    //   写错了就是隐蔽 bug；重建是 O(n)，n 最多几千，一次挖掘几微秒，永远正确。
-    //
-    // 步骤：
-    //   1) CellToInstance.Init(INDEX_NONE, CellOccupied.Num());
-    //   2) for 每个实例 i in [0, Blocks->GetInstanceCount())：
-    //        Blocks->GetInstanceTransform(i, T, false) 取本地变换
-    //        Cell = LocalToCell(T.GetLocation())
-    //        CellIndex = LinearIndex(Cell)，有效就 CellToInstance[CellIndex] = i
+    // 目标：以 HISM 里真实存在的实例为准，把 CellToInstance 整张表重算一遍。
+    //       重建是 O(n)，n 最多几千，一次挖掘几微秒，永远正确；
+    //       增量维护要依赖 RemoveInstance 是 shift 还是 swap，写错了就是隐蔽 bug。
+
+    // 表长度跟逻辑格子数走，不是跟实例数走（土块越挖越少，格子永远是 384 个）。
+    CellToInstance.Init(INDEX_NONE, CellOccupied.Num());
+
+    if (!Blocks)
+    {
+        return;
+    }
+
+    const int32 NumInstances = Blocks->GetInstanceCount();
+    for (int32 InstanceIndex = 0; InstanceIndex < NumInstances; ++InstanceIndex)
+    {
+        FTransform InstanceTransform;
+        // bWorldSpace = false：取组件空间，和 AddInstance 时的坐标系一致。
+        if (!Blocks->GetInstanceTransform(InstanceIndex, InstanceTransform, /*bWorldSpace=*/false))
+        {
+            continue;
+        }
+
+        const FIntVector Cell = LocalToCell(InstanceTransform.GetLocation());
+        const int32 CellIndex = LinearIndex(Cell);
+        if (CellToInstance.IsValidIndex(CellIndex))
+        {
+            CellToInstance[CellIndex] = InstanceIndex;
+        }
+    }
 }
 
-// ===========================================================================
-// 【核心 5】文物出土
-// ===========================================================================
 void ADigSite::TryRevealArtifacts(const FIntVector& Cell, AActor* Digger)
 {
-    // 目标：这一格被挖掉的瞬间，检查有没有埋着文物，有就生成出来。
-    //
-    // 会用到的引擎函数：
-    //   GetWorld()->SpawnActor<AActor>(Class, Location, Rotation, SpawnParams)
-    //   GetActorTransform().TransformPosition(...) / .Rotator()
-    //
-    // 步骤：
-    //   1) 遍历 BuriedArtifacts（用 for (FDigBuriedArtifact& Entry : BuriedArtifacts)，
-    //      注意必须是"引用"，否则改了不会写回数组）。
-    //   2) 跳过 bRevealed == true 的、跳过 Entry.Cell 和当前 Cell 不相等的。
-    //   3) Entry.bRevealed = true;（先标记，避免重复生成）
-    //   4) if (!Entry.ArtifactClass) continue;
-    //   5) 算生成位置：格子中心 + Entry.Offset，再转到世界坐标；
-    //      朝向 = Actor 朝向 + Entry.RotOffset。
-    //   6) FActorSpawnParameters：Owner 设成 Digger（没有就给 this），
-    //      SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn
-    //      （不然文物和土块重叠时会生成失败）。
-    //   7) Entry.SpawnedActor = Spawned;
-    //      生成成功就 OnArtifactRevealed(Spawned, FDigCellCoord::FromIntVector(Cell));
+    // 目标：这一格土被挖掉的瞬间，检查有没有埋着文物，有就生成出来。
+
+    if (BuriedArtifacts.Num() == 0)
+    {
+        return;
+    }
+
+    UWorld* World = GetWorld();
+    if (!World)
+    {
+        return;
+    }
+
+    for (FDigBuriedArtifact& Entry : BuriedArtifacts) // 必须是引用，否则改不回数组
+    {
+        if (Entry.bRevealed || Entry.Cell.ToIntVector() != Cell)
+        {
+            continue;
+        }
+
+        // 先标记：即使生成失败（类为空、关卡还没加载完）也不该每次挖都重试。
+        Entry.bRevealed = true;
+
+        if (!Entry.ArtifactClass)
+        {
+            continue;
+        }
+
+        const FVector LocalPosition = GetCellCenterLocal(Cell) + Entry.Offset;
+        const FVector WorldLocation = GetActorTransform().TransformPosition(LocalPosition);
+        const FRotator WorldRotation = GetActorTransform().Rotator() + Entry.RotOffset;
+
+        FActorSpawnParameters SpawnParams;
+        SpawnParams.Owner = Digger ? Digger : this;
+        // 文物和土块在同一位置，不加 AlwaysSpawn 会因"生成位置被占用"静默失败。
+        SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+        AActor* Spawned = World->SpawnActor<AActor>(Entry.ArtifactClass, WorldLocation, WorldRotation, SpawnParams);
+        Entry.SpawnedActor = Spawned;
+
+        if (Spawned)
+        {
+            OnArtifactRevealed(Spawned, FDigCellCoord::FromIntVector(Cell));
+        }
+    }
 }

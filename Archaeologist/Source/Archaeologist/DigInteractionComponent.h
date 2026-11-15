@@ -38,6 +38,17 @@ public:
     UFUNCTION(BlueprintPure, Category = "Dig")
     ADigSite* GetLastHitDigSite() const { return LastHitDigSite; }
 
+    /**
+     * 只扫一次、不改任何状态：准星和高亮用它。
+     * 和 TryDig 走同一个扫描参数，保证"准星说能挖的"就是"按下去真的挖到的"。
+     */
+    UFUNCTION(BlueprintCallable, Category = "Dig")
+    bool ProbeAim(FHitResult& OutHit) const;
+
+    /** 指定起点/终点的版本（做"从工具尖端往前"的瞄准时用）。 */
+    UFUNCTION(BlueprintCallable, Category = "Dig")
+    bool ProbeAimFromRay(FVector Start, FVector End, FHitResult& OutHit) const;
+
     /** 每次挖掘结束都会触发，蓝图里接尘土/音效/提示。 */
     UFUNCTION(BlueprintImplementableEvent, Category = "Dig|Events")
     void OnDigResult(EDigOutcome Outcome, const FVector& HitLocation, AActor* HitActor);

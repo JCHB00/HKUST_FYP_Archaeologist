@@ -69,6 +69,25 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Dig Site")
     void ResetSite();
 
+    /**
+     * 从一次碰撞命中反查"打中的是哪一格"。
+     * 挖土（ApplyDig）和瞄准辅助（准星/高亮）都走这里，两边判定永远一致。
+     */
+    UFUNCTION(BlueprintCallable, Category = "Dig Site")
+    bool ResolveCellFromHit(const FHitResult& Hit, FDigCellCoord& OutCell) const;
+
+    /** 这一格现在能不能挖（有土 + 满足"必须露在外面"的要求）。 */
+    UFUNCTION(BlueprintPure, Category = "Dig Site")
+    bool CanDigCell(FDigCellCoord Cell) const;
+
+    /** 这一格已经挖了多少：0 = 没动过，1 = 挖穿了。 */
+    UFUNCTION(BlueprintPure, Category = "Dig Site")
+    float GetCellDigProgress(FDigCellCoord Cell) const;
+
+    /** 每格边长（厘米），准星高亮要用它决定方框大小。 */
+    UFUNCTION(BlueprintPure, Category = "Dig Site")
+    float GetCellSize() const { return CellSize; }
+
     // ---------------------------------------------------------------------
     // 给蓝图实现的事件（C++ 里只声明，逻辑写在蓝图里）
     // ---------------------------------------------------------------------
@@ -96,7 +115,7 @@ protected:
 
     /** 以"格子"为单位的尺寸：X/Y 是平面，Z 是层数（深度）。 */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Dig Site|Grid")
-    FDigCellCoord GridSize = FDigCellCoord(8, 8, 6);
+    FDigCellCoord GridSize = FDigCellCoord(3, 3, 6);//O:8,8,6
 
     /** 每一格多大（厘米）。25 = 25cm 的土块，比较接近真实洛阳铲/手铲的挖掘粒度。 */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Dig Site|Grid", meta = (ClampMin = "1.0"))
