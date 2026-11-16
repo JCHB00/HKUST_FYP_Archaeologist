@@ -115,7 +115,7 @@ protected:
 
     /** 以"格子"为单位的尺寸：X/Y 是平面，Z 是层数（深度）。 */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Dig Site|Grid")
-    FDigCellCoord GridSize = FDigCellCoord(3, 3, 6);//O:8,8,6
+    FDigCellCoord GridSize = FDigCellCoord(8, 8, 6);//O:8,8,6
 
     /** 每一格多大（厘米）。25 = 25cm 的土块，比较接近真实洛阳铲/手铲的挖掘粒度。 */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Dig Site|Grid", meta = (ClampMin = "1.0"))

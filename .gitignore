@@ -17,3 +17,6 @@ Saved/Crashes/
 # IDE / OS
 .DS_Store
 Thumbs.db
+
+# Visual Studio 方案檔由 UnrealBuildTool 產生（右鍵 .uproject -> Generate Visual Studio project files）
+*.slnx
