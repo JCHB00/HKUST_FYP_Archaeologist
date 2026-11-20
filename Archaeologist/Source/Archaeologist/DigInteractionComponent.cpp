@@ -47,7 +47,13 @@ EDigOutcome UDigInteractionComponent::TryDig()
 EDigOutcome UDigInteractionComponent::TryDigFromRay(FVector Start, FVector End)
 {
     // 目标：用球体扫描找土，命中 ADigSite 就调用它的 ApplyDig。
+    //DrawDebugLine
+    /*
+    DrawDebugLine 接受世界指標 InWorld、起點與終點 LineStart/LineEnd、顏色 Color 以及控制持續時間與粗細等參數。其中：
 
+    • Color 可設定如 FColor::Red 或 FColor::Green 等顏色。
+    • bPersistentLines 與 LifeTime 用來控制線段是持續顯示、單幀繪製還是維持特定秒數。
+    */
     UWorld* World = GetWorld();
     AActor* OwnerActor = GetOwner();
     if (!World)
@@ -62,9 +68,8 @@ EDigOutcome UDigInteractionComponent::TryDigFromRay(FVector Start, FVector End)
 
     if (bDrawDebug)
     {
-        DrawDebugLine(World, Start, bHit ? Hit.ImpactPoint : End,
-            bHit ? FColor::Green : FColor::Red, /*bPersistentLines=*/false, 2.0f, 0, 1.5f);
-
+        DrawDebugLine(World, Start, bHit ? Hit.ImpactPoint : End,bHit ? FColor::Green : FColor::Red, /*bPersistentLines=*/false, 2.0f, 0, 0.1f);
+        
         if (bHit)
         {
             DrawDebugSphere(World, Hit.ImpactPoint, DigRadius, 8, FColor::Yellow,
